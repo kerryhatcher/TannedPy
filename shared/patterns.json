@@ -1,0 +1,12 @@
+{
+  "escape_hatch": "# tannedpy: allow",
+  "deny_command_pattern": "^(python(\\d(\\.\\d+)*)?|pip(\\d(\\.\\d+)*)?|virtualenv|easy_install)$",
+  "lookup_commands": ["which", "type", "whereis", "command", "hash"],
+  "wrapper_commands": ["env", "nohup", "time", "sudo", "xargs", "exec", "nice", "stdbuf"],
+  "version_args": [["--version"], ["-V"]],
+  "messages": {
+    "run": "tannedpy: system python is blocked. Use uv instead — run an existing script with `uv run <script.py>`; for a new ad-hoc script, give it a `#!/usr/bin/env -S uv run --script` shebang plus a PEP 723 `# /// script` block declaring requires-python and dependencies (see the uv-scripting skill), `chmod a+x` it, and execute it directly. One-liners: `uv run python -c '...'`. If the user explicitly asked for system python, re-run this exact command with `# tannedpy: allow` appended.",
+    "install": "tannedpy: pip is blocked. Use uv instead — in a project: `uv add <package>` (dev: `uv add --dev`); for a self-contained script: `uv add --script <script.py> <package>`; to run a tool once: `uvx <tool>`. If the user explicitly asked for pip, re-run this exact command with `# tannedpy: allow` appended.",
+    "venv": "tannedpy: manual venv management is blocked. uv manages environments automatically — in a project use `uv init` / `uv sync` and run things with `uv run <cmd>`; self-contained scripts with PEP 723 metadata get ephemeral environments from `uv run --script`. If the user explicitly asked for a manual venv, re-run this exact command with `# tannedpy: allow` appended."
+  }
+}
