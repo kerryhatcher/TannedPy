@@ -36,6 +36,7 @@ def test_split_segments(command, expected):
 # --- extract_invocation ----------------------------------------------------
 
 WRAPPERS = frozenset(PATTERNS["wrapper_commands"])
+WRAPPER_VALUE_FLAGS = PATTERNS["wrapper_value_flags"]
 
 
 @pytest.mark.parametrize(
@@ -45,18 +46,19 @@ WRAPPERS = frozenset(PATTERNS["wrapper_commands"])
         ("/usr/bin/python3 foo.py", "python3", ["foo.py"]),
         ("FOO=1 BAR=2 python x.py", "python", ["x.py"]),
         ("sudo python3 x.py", "python3", ["x.py"]),
+        ("sudo -u root python3 x.py", "python3", ["x.py"]),
         ("env python x.py", "python", ["x.py"]),
         ("grep python file.txt", "grep", ["python", "file.txt"]),
         ("", None, []),
     ],
 )
 def test_extract_invocation(segment, word, args):
-    assert guard.extract_invocation(segment, WRAPPERS) == (word, args)
+    assert guard.extract_invocation(segment, WRAPPERS, WRAPPER_VALUE_FLAGS) == (word, args)
 
 
 def test_extract_invocation_unparseable_returns_none():
     # Unclosed quote makes shlex raise; we must not crash.
-    assert guard.extract_invocation("echo 'unclosed", WRAPPERS) == (None, [])
+    assert guard.extract_invocation("echo 'unclosed", WRAPPERS, WRAPPER_VALUE_FLAGS) == (None, [])
 
 
 # --- evaluate: denials -----------------------------------------------------
@@ -78,6 +80,9 @@ def test_extract_invocation_unparseable_returns_none():
         "easy_install thing",
         "sudo python3 x.py",
         "FOO=1 python x.py",
+        "sudo -u root python3 evil.py",
+        "nice -n 10 python3 evil.py",
+        "xargs -n 1 python3",
     ],
 )
 def test_denied(command):
@@ -105,6 +110,7 @@ def test_denied(command):
         "python3 x.py  # tannedpy: allow",
         "pip install x  # tannedpy: allow",
         "git commit -m 'fix python handling'",
+        "sudo -u root uv run x.py",
         "",
     ],
 )
@@ -132,3 +138,11 @@ def test_python_m_pip_gets_install_message():
 def test_plain_python_gets_run_message():
     reason = guard.evaluate("python3 foo.py", PATTERNS)
     assert "uv run" in reason and "--script" in reason
+
+
+# --- load_patterns ----------------------------------------------------------
+
+def test_load_patterns_matches_json_file():
+    assert guard.load_patterns() == json.loads(
+        (REPO / "shared" / "patterns.json").read_text()
+    )

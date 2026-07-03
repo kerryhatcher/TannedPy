@@ -68,7 +68,11 @@ def split_segments(command: str) -> list[str]:
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
-def extract_invocation(segment: str, wrappers: frozenset[str]) -> tuple[str | None, list[str]]:
+def extract_invocation(
+    segment: str,
+    wrappers: frozenset[str],
+    wrapper_value_flags: dict[str, list[str]] | None = None,
+) -> tuple[str | None, list[str]]:
     """Return (command word basename, args), skipping env assignments and wrappers."""
     try:
         tokens = shlex.split(segment, posix=True)
@@ -81,9 +85,13 @@ def extract_invocation(segment: str, wrappers: frozenset[str]) -> tuple[str | No
             idx += 1
             continue
         if tok in wrappers:
+            value_flags = (wrapper_value_flags or {}).get(tok, [])
             idx += 1
             while idx < len(tokens) and tokens[idx].startswith("-"):
-                idx += 1
+                if tokens[idx] in value_flags:
+                    idx += 2
+                else:
+                    idx += 1
             continue
         break
     if idx >= len(tokens):
@@ -108,10 +116,11 @@ def evaluate(command: str, patterns: dict) -> str | None:
         return None
     deny_re = re.compile(patterns["deny_command_pattern"])
     wrappers = frozenset(patterns["wrapper_commands"])
+    wrapper_value_flags = patterns.get("wrapper_value_flags")
     lookups = frozenset(patterns["lookup_commands"])
     version_args = [list(v) for v in patterns["version_args"]]
     for segment in split_segments(command):
-        word, args = extract_invocation(segment, wrappers)
+        word, args = extract_invocation(segment, wrappers, wrapper_value_flags)
         if word is None or word == "uv" or word in lookups:
             continue
         if deny_re.match(word):
