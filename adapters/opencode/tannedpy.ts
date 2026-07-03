@@ -41,12 +41,31 @@ function splitSegments(command: string): string[] {
 }
 
 function tokens(segment: string): string[] {
-  // Light tokenizer: strip quotes, split on whitespace. Parity with shlex
-  // is not required — only the command word position matters here.
+  // Character-walking tokenizer mirroring shlex posix semantics: adjacent
+  // quoted/unquoted pieces join into one token (pyt"hon3" -> python3),
+  // quotes are stripped, and backslash escapes are resolved.
   const out: string[] = []
-  const re = /'([^']*)'|"((?:\\.|[^"])*)"|(\S+)/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(segment)) !== null) out.push(m[1] ?? m[2] ?? m[3])
+  let cur = ""
+  let started = false
+  let quote: string | null = null
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i]
+    if (quote) {
+      if (quote === '"' && ch === "\\" && i + 1 < segment.length) { cur += segment[i + 1]; i++; continue }
+      if (ch === quote) { quote = null; continue }
+      cur += ch
+      continue
+    }
+    if (ch === "'" || ch === '"') { quote = ch; started = true; continue }
+    if (ch === "\\" && i + 1 < segment.length) { cur += segment[i + 1]; i++; started = true; continue }
+    if (/\s/.test(ch)) {
+      if (started) { out.push(cur); cur = ""; started = false }
+      continue
+    }
+    cur += ch
+    started = true
+  }
+  if (started) out.push(cur)
   return out
 }
 
