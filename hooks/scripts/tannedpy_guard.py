@@ -13,6 +13,7 @@ Fails open: every code path exits 0.
 import json
 import re
 import shlex
+import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -128,3 +129,31 @@ def evaluate(command: str, patterns: dict) -> str | None:
                 continue
             return _pick_message(word, args, patterns["messages"])
     return None
+
+
+def main() -> None:
+    data = json.loads(sys.stdin.read())
+    if data.get("tool_name") != "Bash":
+        return
+    command = (data.get("tool_input") or {}).get("command") or ""
+    reason = evaluate(command, load_patterns())
+    if reason:
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": reason,
+                    }
+                }
+            )
+        )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:  # fail open: never break the agent's shell
+        print(f"tannedpy-guard: internal error, failing open: {exc}", file=sys.stderr)
+    sys.exit(0)

@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -146,3 +147,52 @@ def test_load_patterns_matches_json_file():
     assert guard.load_patterns() == json.loads(
         (REPO / "shared" / "patterns.json").read_text()
     )
+
+
+# --- end-to-end: run the hook as Claude Code would --------------------------
+
+
+def run_guard(stdin_text: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [str(GUARD_PATH)], input=stdin_text, capture_output=True, text=True, timeout=60
+    )
+
+
+def payload(command: str) -> str:
+    return json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": command}, "hook_event_name": "PreToolUse"}
+    )
+
+
+def test_e2e_deny_emits_json_and_exits_zero():
+    result = run_guard(payload("python3 foo.py"))
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    hso = out["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PreToolUse"
+    assert hso["permissionDecision"] == "deny"
+    assert "uv run" in hso["permissionDecisionReason"]
+
+
+def test_e2e_allow_emits_nothing():
+    result = run_guard(payload("uv run pytest"))
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+
+
+def test_e2e_non_bash_tool_ignored():
+    result = run_guard(json.dumps({"tool_name": "Write", "tool_input": {"file_path": "python"}}))
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+
+
+def test_e2e_malformed_input_fails_open():
+    result = run_guard("this is not json {{{")
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+
+
+def test_e2e_empty_input_fails_open():
+    result = run_guard("")
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
