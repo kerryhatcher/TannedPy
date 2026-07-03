@@ -35,7 +35,19 @@ uv resolves the PEP 723 block into a cached, isolated environment on first run. 
 4. **Add a dep to an existing script:** `uv add --script script.py <package>` (edits the PEP 723 block for you).
 5. **Start from a template:** `uv init --script script.py --python 3.13`.
 6. **One-liners** don't need a file: `uv run python -c '...'` or with deps: `uv run --with requests python -c '...'`.
-7. **Reproducibility** (durable tools only): `uv lock --script script.py` creates a lockfile; `# exclude-newer = "2026-07-03T00:00:00Z"` in the block pins resolution in time. Skip for throwaway scripts.
+7. **Reproducibility** (durable tools only): `uv lock --script script.py` creates a lockfile; `exclude-newer` pins resolution in time. It's a uv-specific setting, so it lives under a `[tool.uv]` sub-table in the PEP 723 block, not a bare comment line:
+
+   ```python
+   # /// script
+   # requires-python = ">=3.12"
+   # dependencies = ["requests"]
+   #
+   # [tool.uv]
+   # exclude-newer = "2026-07-03T00:00:00Z"
+   # ///
+   ```
+
+   Skip for throwaway scripts.
 8. **Inside a project** the script's inline metadata wins — project dependencies are intentionally ignored. If you want the project env instead, that's `uv run <script>` *without* inline metadata (see the uv-projects skill).
 
 ## Traps

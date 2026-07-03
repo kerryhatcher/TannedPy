@@ -5,15 +5,22 @@ import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
 
 const here = dirname(fileURLToPath(import.meta.url))
-const patterns = JSON.parse(
-  readFileSync(join(here, "..", "..", "shared", "patterns.json"), "utf8"),
-)
 
-const denyRe = new RegExp(patterns.deny_command_pattern)
-const wrappers = new Set<string>(patterns.wrapper_commands)
-const wrapperValueFlags: Record<string, string[]> = patterns.wrapper_value_flags ?? {}
-const lookups = new Set<string>(patterns.lookup_commands)
-const versionArgs: string[][] = patterns.version_args
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let patterns: any = null
+try {
+  patterns = JSON.parse(
+    readFileSync(join(here, "..", "..", "shared", "patterns.json"), "utf8"),
+  )
+} catch (err) {
+  console.warn("tannedpy: failed to load patterns.json, adapter inert:", err)
+}
+
+const denyRe = patterns ? new RegExp(patterns.deny_command_pattern) : null
+const wrappers = new Set<string>(patterns?.wrapper_commands ?? [])
+const wrapperValueFlags: Record<string, string[]> = patterns?.wrapper_value_flags ?? {}
+const lookups = new Set<string>(patterns?.lookup_commands ?? [])
+const versionArgs: string[][] = patterns?.version_args ?? []
 
 function splitSegments(command: string): string[] {
   const segments: string[] = []
@@ -44,6 +51,9 @@ function tokens(segment: string): string[] {
   // Character-walking tokenizer mirroring shlex posix semantics: adjacent
   // quoted/unquoted pieces join into one token (pyt"hon3" -> python3),
   // quotes are stripped, and backslash escapes are resolved.
+  // Accepted divergences from shlex: unclosed quotes and backslash-before-ordinary-chars
+  // in double quotes fail CLOSED here (deny-leaning), while the Python guard's shlex
+  // fails open — divergences never flip a deny into an allow.
   const out: string[] = []
   let cur = ""
   let started = false
@@ -103,6 +113,7 @@ function pickMessage(word: string, args: string[]): string {
 }
 
 export function evaluate(command: string): string | null {
+  if (!patterns || !denyRe) return null
   if (command.includes(patterns.escape_hatch)) return null
   for (const segment of splitSegments(command)) {
     const [word, args] = extractInvocation(segment)

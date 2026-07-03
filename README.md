@@ -51,6 +51,10 @@ uv run pytest        # guard engine test suite
 uv run ruff check .  # lint
 ```
 
+## Testing
+
+`bun test adapters/tests/` runs the opencode/pi adapter parity suite against the Python guard's behavior.
+
 Design docs: `docs/superpowers/specs/`. Research: grimoire `research/` topics
 `uv-single-file-scripts`, `open-plugins-spec`, `pi-agent-harness`,
 `opencode-plugins`, `claude-code-hooks`.
