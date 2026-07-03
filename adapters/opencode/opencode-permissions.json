@@ -1,0 +1,16 @@
+{
+  "permission": {
+    "bash": {
+      "*": "allow",
+      "python *": "deny",
+      "python2 *": "deny",
+      "python3 *": "deny",
+      "python3.* *": "deny",
+      "pip *": "deny",
+      "pip3 *": "deny",
+      "virtualenv *": "deny",
+      "uv *": "allow",
+      "uvx *": "allow"
+    }
+  }
+}
