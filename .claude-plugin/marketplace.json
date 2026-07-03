@@ -1,0 +1,11 @@
+{
+  "name": "tannedpy",
+  "owner": {"name": "Kerry Hatcher"},
+  "plugins": [
+    {
+      "name": "tannedpy",
+      "source": "./",
+      "description": "uv-first enforcement: blocks system python/pip, teaches uv shebang scripts"
+    }
+  ]
+}
