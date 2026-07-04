@@ -279,13 +279,20 @@ issues:
     tags: [everyday]
     severity: high
     priority_rank: 3
-    status: open
+    status: fixed
     locations: [hooks/scripts/tannedpy_guard.py:128, patterns.json:16]
     evidence: >
       `python3 --version 2>&1` -> DENY. Line 128 `if args in version_args` needs exact
       ["--version"]; the 2>&1 token makes args=["--version","2>&1"], exemption misses,
       command denied. Extremely common "does python exist" idiom.
     fixes: [R2]
+    resolution: >
+      Fixed in feature 001-version-probe-nudge: `version_args` strict-equality replaced
+      by `is_version_probe()` (patterns.json's `version_probe.flags` +
+      `redirection_pattern`), tolerant of trailing shell redirections. The allow was also
+      upgraded to allow-with-nudge — an advisory note steering toward uv rides
+      `additionalContext` (Claude Code) / the tool result (opencode, pi) whenever a
+      recognized probe is allowed. See specs/001-version-probe-nudge/.
 
   # ---------------- Theme C — Robustness / DoS ----------------
   - id: F13

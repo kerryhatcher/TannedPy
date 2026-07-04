@@ -2,8 +2,15 @@
 // (opencode and pi) to guarantee they agree with each other and with the
 // Python guard's behavior (see tests/test_guard.py for the canonical suite).
 import { describe, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { evaluate as evaluateOpencode } from "../opencode/tannedpy.ts"
 import { evaluate as evaluatePi } from "../pi/index.ts"
+
+const here = dirname(fileURLToPath(import.meta.url))
+const REPO_ROOT = join(here, "..", "..")
+const GUARD_PATH = join(REPO_ROOT, "hooks", "scripts", "tannedpy_guard.py")
 
 const DENY: string[] = [
   "python3 foo.py",
@@ -33,8 +40,6 @@ const ALLOW: string[] = [
   "uv run python -c 'print(1)'",
   "uv add requests",
   "uvx ruff check",
-  "python --version",
-  "python3 -V",
   "which python3",
   "command -v python",
   "type python3",
@@ -42,14 +47,12 @@ const ALLOW: string[] = [
   "echo 'python3 is old'",
   'echo "python3 is old"',
   "cat requirements.txt",
-  "python3 x.py  # tannedpy: allow",
-  "pip install x  # tannedpy: allow",
   "git commit -m 'fix python handling'",
   "sudo -u root uv run x.py",
   "",
 ]
 
-const ADAPTERS: Array<[string, (command: string) => string | null]> = [
+const ADAPTERS: Array<[string, (command: string) => { deny: string | null; note: string | null }]> = [
   ["opencode", evaluateOpencode],
   ["pi", evaluatePi],
 ]
@@ -59,7 +62,7 @@ for (const [name, evaluate] of ADAPTERS) {
     describe("deny", () => {
       for (const command of DENY) {
         test(`denies: ${JSON.stringify(command)}`, () => {
-          expect(evaluate(command)).toBeTruthy()
+          expect(evaluate(command).deny).toBeTruthy()
         })
       }
     })
@@ -67,25 +70,91 @@ for (const [name, evaluate] of ADAPTERS) {
     describe("allow", () => {
       for (const command of ALLOW) {
         test(`allows: ${JSON.stringify(command)}`, () => {
-          expect(evaluate(command)).toBeNull()
+          expect(evaluate(command).deny).toBeNull()
         })
       }
     })
 
     describe("message routing", () => {
       test("pip install routes to `uv add`", () => {
-        expect(evaluate("pip install requests")).toContain("uv add")
+        expect(evaluate("pip install requests").deny).toContain("uv add")
       })
 
       test("manual venv routes to `uv init` or `uv sync`", () => {
-        const reason = evaluate("python -m venv .venv")
-        expect(reason).toBeTruthy()
-        expect(reason?.includes("uv init") || reason?.includes("uv sync")).toBe(true)
+        const { deny } = evaluate("python -m venv .venv")
+        expect(deny).toBeTruthy()
+        expect(deny?.includes("uv init") || deny?.includes("uv sync")).toBe(true)
       })
 
       test("bare python routes to `uv run`", () => {
-        expect(evaluate("python3 foo.py")).toContain("uv run")
+        expect(evaluate("python3 foo.py").deny).toContain("uv run")
       })
     })
   })
 }
+
+// --- Differential parity: version-probe conformance table (US3, FR-007) ----
+//
+// The Python guard is the oracle. For each command below we spawn the actual
+// guard and assert both TS adapters return the identical (deny, note)
+// classification and byte-identical note text — never a hand-maintained
+// expectations list (Constitution III).
+
+const VERSION_PROBE_TABLE: string[] = [
+  "python3 --version 2>&1",
+  "python3 --version",
+  "python3 -V",
+  "pip --version",
+  "pip3 -V 2>&1",
+  "python3 --version > /tmp/v.txt",
+  "python3 --version >> log 2>&1",
+  "python3 --version | grep 3",
+  "sudo python3 --version 2>&1",
+  "python3 --version && python3 train.py",
+  "python3 --version --unknown-flag foo",
+  "python3 script.py",
+  "python3",
+  "node --version",
+  "ruby -v",
+  "which python3",
+  "uv run python --version",
+  "python3 x.py  # tannedpy: allow",
+  "timeout python3 --version",
+]
+
+function runPythonGuard(command: string): { deny: string | null; note: string | null } {
+  const payload = JSON.stringify({
+    tool_name: "Bash",
+    tool_input: { command },
+    hook_event_name: "PreToolUse",
+  })
+  const result = spawnSync("uv", ["run", GUARD_PATH], {
+    input: payload,
+    encoding: "utf8",
+    cwd: REPO_ROOT,
+  })
+  const stdout = (result.stdout ?? "").trim()
+  if (!stdout) return { deny: null, note: null }
+  const parsed = JSON.parse(stdout)
+  const hso = parsed.hookSpecificOutput
+  if (hso.permissionDecision === "deny") {
+    return { deny: hso.permissionDecisionReason, note: null }
+  }
+  if (hso.permissionDecision === "defer" && hso.additionalContext) {
+    return { deny: null, note: hso.additionalContext }
+  }
+  return { deny: null, note: null }
+}
+
+describe("differential parity: version-probe table vs actual Python guard", () => {
+  for (const command of VERSION_PROBE_TABLE) {
+    test(`oracle matches both adapters: ${JSON.stringify(command)}`, () => {
+      const oracle = runPythonGuard(command)
+      for (const [name, evaluate] of ADAPTERS) {
+        const actual = evaluate(command)
+        expect([name, actual.deny]).toEqual([name, oracle.deny])
+        expect([name, actual.note]).toEqual([name, oracle.note])
+      }
+    })
+  }
+})

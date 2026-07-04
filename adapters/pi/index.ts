@@ -21,7 +21,10 @@ const denyRe = patterns ? new RegExp(patterns.deny_command_pattern) : null
 const wrappers = new Set<string>(patterns?.wrapper_commands ?? [])
 const wrapperValueFlags: Record<string, string[]> = patterns?.wrapper_value_flags ?? {}
 const lookups = new Set<string>(patterns?.lookup_commands ?? [])
-const versionArgs: string[][] = patterns?.version_args ?? []
+const probeFlags: string[] = patterns?.version_probe?.flags ?? []
+const probeRedirectionRe = patterns?.version_probe?.redirection_pattern
+  ? new RegExp(patterns.version_probe.redirection_pattern)
+  : null
 
 function splitSegments(command: string): string[] {
   const segments: string[] = []
@@ -113,45 +116,91 @@ function pickMessage(word: string, args: string[]): string {
   return m.run
 }
 
-export function evaluate(command: string): string | null {
-  if (!patterns || !denyRe) return null
-  if (command.includes(patterns.escape_hatch)) return null
+function isVersionProbe(args: string[]): boolean {
+  if (!probeRedirectionRe || args.length === 0 || !probeFlags.includes(args[0])) return false
+  let i = 1
+  while (i < args.length) {
+    const match = probeRedirectionRe.exec(args[i])
+    if (!match) return false
+    i += match[0].length === args[i].length ? 2 : 1
+  }
+  return true
+}
+
+export function evaluate(command: string): { deny: string | null; note: string | null } {
+  if (!patterns || !denyRe) return { deny: null, note: null }
+  if (command.includes(patterns.escape_hatch)) return { deny: null, note: null }
+  let probeSeen = false
   for (const segment of splitSegments(command)) {
     const [word, args] = extractInvocation(segment)
     if (word === null || word === "uv" || lookups.has(word)) continue
     if (denyRe.test(word)) {
-      if (versionArgs.some((v) => v.length === args.length && v.every((x, i) => x === args[i]))) continue
-      return pickMessage(word, args)
+      if (isVersionProbe(args)) {
+        probeSeen = true
+        continue
+      }
+      return { deny: pickMessage(word, args), note: null }
     }
   }
-  return null
+  return probeSeen ? { deny: null, note: patterns.messages.version_probe_note } : { deny: null, note: null }
 }
 
 // Registration — verified against https://pi.dev/docs/latest/extensions on
 // 2026-07-03 (see README.md "API note" for details). Extensions export a
 // default factory function receiving ExtensionAPI; the `tool_call` event
-// fires before execution and can block by returning `{ block: true, reason }`.
+// fires before execution and can block by returning `{ block: true, reason }`;
+// `tool_result` handlers may return a partial patch whose `content` becomes
+// the tool result the model sees.
 interface ToolCallEvent {
   toolName: string
   toolCallId: string
   input: Record<string, unknown>
 }
 
+interface ContentBlock {
+  type: string
+  text?: string
+  [key: string]: unknown
+}
+
+interface ToolResultEvent {
+  toolCallId: string
+  content: ContentBlock[]
+}
+
 interface ExtensionAPI {
-  on: (
+  on(
     event: "tool_call",
     handler: (
       event: ToolCallEvent,
       ctx: { signal?: AbortSignal },
     ) => { block: true; reason?: string } | undefined | Promise<{ block: true; reason?: string } | undefined>,
-  ) => void
+  ): void
+  on(
+    event: "tool_result",
+    handler: (
+      event: ToolResultEvent,
+    ) => { content: ContentBlock[] } | undefined | Promise<{ content: ContentBlock[] } | undefined>,
+  ): void
 }
+
+// Module-level, one-shot: set in tool_call, consumed (and deleted) by
+// tool_result for the same toolCallId.
+const pendingNotes = new Map<string, string>()
 
 export default function tannedpy(pi: ExtensionAPI) {
   pi.on("tool_call", (event) => {
     if (event.toolName !== "bash") return undefined
-    const reason = evaluate(String(event.input.command ?? ""))
-    if (reason) return { block: true, reason }
+    const { deny, note } = evaluate(String(event.input.command ?? ""))
+    if (deny) return { block: true, reason: deny }
+    if (note) pendingNotes.set(event.toolCallId, note)
     return undefined
+  })
+
+  pi.on("tool_result", (event) => {
+    const note = pendingNotes.get(event.toolCallId)
+    if (note === undefined) return undefined
+    pendingNotes.delete(event.toolCallId)
+    return { content: [...event.content, { type: "text", text: note }] }
   })
 }

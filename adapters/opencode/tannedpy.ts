@@ -20,7 +20,10 @@ const denyRe = patterns ? new RegExp(patterns.deny_command_pattern) : null
 const wrappers = new Set<string>(patterns?.wrapper_commands ?? [])
 const wrapperValueFlags: Record<string, string[]> = patterns?.wrapper_value_flags ?? {}
 const lookups = new Set<string>(patterns?.lookup_commands ?? [])
-const versionArgs: string[][] = patterns?.version_args ?? []
+const probeFlags: string[] = patterns?.version_probe?.flags ?? []
+const probeRedirectionRe = patterns?.version_probe?.redirection_pattern
+  ? new RegExp(patterns.version_probe.redirection_pattern)
+  : null
 
 function splitSegments(command: string): string[] {
   const segments: string[] = []
@@ -112,29 +115,59 @@ function pickMessage(word: string, args: string[]): string {
   return m.run
 }
 
-export function evaluate(command: string): string | null {
-  if (!patterns || !denyRe) return null
-  if (command.includes(patterns.escape_hatch)) return null
+function isVersionProbe(args: string[]): boolean {
+  if (!probeRedirectionRe || args.length === 0 || !probeFlags.includes(args[0])) return false
+  let i = 1
+  while (i < args.length) {
+    const match = probeRedirectionRe.exec(args[i])
+    if (!match) return false
+    i += match[0].length === args[i].length ? 2 : 1
+  }
+  return true
+}
+
+export function evaluate(command: string): { deny: string | null; note: string | null } {
+  if (!patterns || !denyRe) return { deny: null, note: null }
+  if (command.includes(patterns.escape_hatch)) return { deny: null, note: null }
+  let probeSeen = false
   for (const segment of splitSegments(command)) {
     const [word, args] = extractInvocation(segment)
     if (word === null || word === "uv" || lookups.has(word)) continue
     if (denyRe.test(word)) {
-      if (versionArgs.some((v) => v.length === args.length && v.every((x, i) => x === args[i]))) continue
-      return pickMessage(word, args)
+      if (isVersionProbe(args)) {
+        probeSeen = true
+        continue
+      }
+      return { deny: pickMessage(word, args), note: null }
     }
   }
-  return null
+  return probeSeen ? { deny: null, note: patterns.messages.version_probe_note } : { deny: null, note: null }
 }
+
+// Module-level, one-shot: set in tool.execute.before, consumed (and deleted)
+// by tool.execute.after for the same callID.
+const pendingNotes = new Map<string, string>()
 
 export const TannedPyPlugin = async () => {
   return {
     "tool.execute.before": async (
-      input: { tool: string },
+      input: { tool: string; sessionID: string; callID: string },
       output: { args: { command?: string } },
     ) => {
       if (input.tool !== "bash") return
-      const reason = evaluate(output.args.command ?? "")
-      if (reason) throw new Error(reason)
+      const { deny, note } = evaluate(output.args.command ?? "")
+      if (deny) throw new Error(deny)
+      if (note) pendingNotes.set(input.callID, note)
+    },
+    "tool.execute.after": async (
+      input: { tool: string; sessionID: string; callID: string; args: { command?: string } },
+      output: { title: string; output: string; metadata: unknown },
+    ) => {
+      const note = pendingNotes.get(input.callID)
+      if (note !== undefined) {
+        pendingNotes.delete(input.callID)
+        output.output += `\n\n${note}`
+      }
     },
   }
 }

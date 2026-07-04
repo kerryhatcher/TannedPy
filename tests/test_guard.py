@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -87,7 +88,8 @@ def test_extract_invocation_unparseable_returns_none():
     ],
 )
 def test_denied(command):
-    assert guard.evaluate(command, PATTERNS) is not None
+    deny, _note = guard.evaluate(command, PATTERNS)
+    assert deny is not None
 
 
 # --- evaluate: allowed -----------------------------------------------------
@@ -116,28 +118,64 @@ def test_denied(command):
     ],
 )
 def test_allowed(command):
-    assert guard.evaluate(command, PATTERNS) is None
+    deny, _note = guard.evaluate(command, PATTERNS)
+    assert deny is None
+
+
+# --- evaluate: version-probe recognition (US1, FR-001/FR-008) --------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 --version 2>&1",  # F12 regression
+        "python3 --version",
+        "python3 -V",
+        "pip3 -V 2>&1",
+        "python3 --version > /tmp/v.txt",
+        "python3 --version >> log 2>&1",
+        "sudo python3 --version 2>&1",
+        "python3 --version | grep 3",
+    ],
+)
+def test_version_probe_is_allowed(command):
+    deny, _note = guard.evaluate(command, PATTERNS)
+    assert deny is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 script.py",
+        "python3",
+        "python3 --version --unknown-flag foo",
+        "python3 --version && python3 train.py",
+    ],
+)
+def test_non_probe_still_denied(command):
+    deny, _note = guard.evaluate(command, PATTERNS)
+    assert deny is not None
 
 
 # --- evaluate: message selection -------------------------------------------
 
 def test_pip_gets_install_message():
-    reason = guard.evaluate("pip install requests", PATTERNS)
+    reason, _note = guard.evaluate("pip install requests", PATTERNS)
     assert "uv add" in reason
 
 
 def test_venv_gets_venv_message():
-    reason = guard.evaluate("python -m venv .venv", PATTERNS)
+    reason, _note = guard.evaluate("python -m venv .venv", PATTERNS)
     assert "uv init" in reason or "uv sync" in reason
 
 
 def test_python_m_pip_gets_install_message():
-    reason = guard.evaluate("python3 -m pip install x", PATTERNS)
+    reason, _note = guard.evaluate("python3 -m pip install x", PATTERNS)
     assert "uv add" in reason
 
 
 def test_plain_python_gets_run_message():
-    reason = guard.evaluate("python3 foo.py", PATTERNS)
+    reason, _note = guard.evaluate("python3 foo.py", PATTERNS)
     assert "uv run" in reason and "--script" in reason
 
 
@@ -147,6 +185,29 @@ def test_load_patterns_matches_json_file():
     assert guard.load_patterns() == json.loads(
         (REPO / "shared" / "patterns.json").read_text()
     )
+
+
+# --- patterns.json contract: version_probe ----------------------------------
+
+
+def test_version_probe_flags_are_non_empty_strings():
+    flags = PATTERNS["version_probe"]["flags"]
+    assert isinstance(flags, list) and len(flags) > 0
+    assert all(isinstance(f, str) and f for f in flags)
+
+
+def test_version_probe_redirection_pattern_compiles():
+    re.compile(PATTERNS["version_probe"]["redirection_pattern"])
+
+
+def test_version_probe_note_is_non_empty_and_terse():
+    note = PATTERNS["messages"]["version_probe_note"]
+    assert isinstance(note, str) and note
+    assert len(note) <= 300
+
+
+def test_version_args_key_is_absent():
+    assert "version_args" not in PATTERNS
 
 
 # --- end-to-end: run the hook as Claude Code would --------------------------
@@ -196,3 +257,52 @@ def test_e2e_empty_input_fails_open():
     result = run_guard("")
     assert result.returncode == 0
     assert result.stdout.strip() == ""
+
+
+# --- e2e: version-probe allow-with-note (US2, FR-003/FR-004/FR-005/FR-006) --
+
+
+@pytest.mark.parametrize("command", ["python3 --version", "pip --version"])
+def test_e2e_probe_emits_defer_with_note(command):
+    result = run_guard(payload(command))
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    hso = out["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PreToolUse"
+    assert hso["permissionDecision"] == "defer"
+    assert hso["additionalContext"] == PATTERNS["messages"]["version_probe_note"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["node --version", "which python3", "uv run python --version"],
+)
+def test_e2e_non_probe_emits_nothing(command):
+    result = run_guard(payload(command))
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+
+
+def test_e2e_deny_never_carries_additional_context():
+    result = run_guard(payload("python3 script.py"))
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    assert "additionalContext" not in out["hookSpecificOutput"]
+
+
+def test_e2e_deny_suppresses_note_even_with_probe_segment():
+    result = run_guard(payload("python3 --version && python3 train.py"))
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "additionalContext" not in hso
+
+
+def test_e2e_multiple_probe_segments_yield_exactly_one_note():
+    result = run_guard(payload("python3 --version 2>&1 && pip -V"))
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "defer"
+    assert hso["additionalContext"] == PATTERNS["messages"]["version_probe_note"]

@@ -5,3 +5,4 @@
 - Projects: `uv init` / `uv add` / `uv sync` / `uv run <cmd>` / `uv python pin`. Tools: `uvx <tool>`.
 - One-liners: `uv run python -c '...'` (add deps with `--with <pkg>`).
 - System python only when the user explicitly asks; mark the command with `# tannedpy: allow`.
+- `python3 --version`/`-V` (with or without trailing redirections) runs fine and is not blocked — it's a check, not an execution. Prefer it stays that way; if it precedes running/installing, switch to uv for the actual work.

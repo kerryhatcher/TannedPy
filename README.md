@@ -38,6 +38,25 @@ no system python, no pip, no manual venvs.
 
 See `adapters/opencode/README.md` and `adapters/pi/README.md`.
 
+## Version checks
+
+`python3 --version`, `pip -V`, and the same with trailing shell redirections
+(`python3 --version 2>&1`, `>> log`, piped to `| grep`, etc.) are **allowed**,
+not denied — checking whether python/pip exists doesn't run or install
+anything. The command still executes normally; the agent additionally
+receives a terse, one-time advisory note nudging it toward `uv run` / `uv add`
+/ `uvx` if that check was in service of running or installing with system
+python. Any other flag alongside `--version`/`-V` (e.g. `--version --foo`)
+is **not** treated as a pure version probe and is denied as usual. The note
+is advisory only — it never changes the allow/deny decision, and a probe
+wrapped in a command tannedpy doesn't recognize (e.g. `timeout python3
+--version`) executes without a note, same as before this behavior existed.
+
+Delivery differs slightly by runtime: Claude Code attaches the note to the
+tool call before it runs (`additionalContext`); opencode and pi append it to
+the tool result after it runs. Both land in the agent's context within the
+same turn.
+
 ## Escape hatch
 
 When the user explicitly asks for system python, agents append `# tannedpy: allow`

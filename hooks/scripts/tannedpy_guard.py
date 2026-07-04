@@ -111,24 +111,47 @@ def _pick_message(word: str, args: list[str], messages: dict) -> str:
     return messages["run"]
 
 
-def evaluate(command: str, patterns: dict) -> str | None:
-    """Return a deny reason, or None if the command is allowed."""
+def is_version_probe(args: list[str], flags: list[str], redirection_re: re.Pattern) -> bool:
+    """Return True if args is a bare version flag plus trailing redirection tokens."""
+    if not args or args[0] not in flags:
+        return False
+    i = 1
+    while i < len(args):
+        match = redirection_re.match(args[i])
+        if not match:
+            return False
+        i += 2 if match.end() == len(args[i]) else 1
+    return True
+
+
+def evaluate(command: str, patterns: dict) -> tuple[str | None, str | None]:
+    """Return (deny_reason, note); the two are never both non-None.
+
+    deny_reason is set when a segment is denied (first deny wins, suppressing
+    any note). note is set when nothing is denied but at least one segment was
+    a recognized version probe (e.g. `python3 --version 2>&1`).
+    """
     if patterns["escape_hatch"] in command:
-        return None
+        return None, None
     deny_re = re.compile(patterns["deny_command_pattern"])
     wrappers = frozenset(patterns["wrapper_commands"])
     wrapper_value_flags = patterns.get("wrapper_value_flags")
     lookups = frozenset(patterns["lookup_commands"])
-    version_args = [list(v) for v in patterns["version_args"]]
+    probe_flags = patterns["version_probe"]["flags"]
+    probe_redirection_re = re.compile(patterns["version_probe"]["redirection_pattern"])
+    probe_seen = False
     for segment in split_segments(command):
         word, args = extract_invocation(segment, wrappers, wrapper_value_flags)
         if word is None or word == "uv" or word in lookups:
             continue
         if deny_re.match(word):
-            if args in version_args:
+            if is_version_probe(args, probe_flags, probe_redirection_re):
+                probe_seen = True
                 continue
-            return _pick_message(word, args, patterns["messages"])
-    return None
+            return _pick_message(word, args, patterns["messages"]), None
+    if probe_seen:
+        return None, patterns["messages"]["version_probe_note"]
+    return None, None
 
 
 def main() -> None:
@@ -136,7 +159,7 @@ def main() -> None:
     if data.get("tool_name") != "Bash":
         return
     command = (data.get("tool_input") or {}).get("command") or ""
-    reason = evaluate(command, load_patterns())
+    reason, note = evaluate(command, load_patterns())
     if reason:
         print(
             json.dumps(
@@ -145,6 +168,18 @@ def main() -> None:
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
                         "permissionDecisionReason": reason,
+                    }
+                }
+            )
+        )
+    elif note:
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "defer",
+                        "additionalContext": note,
                     }
                 }
             )
