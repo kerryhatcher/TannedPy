@@ -1,0 +1,628 @@
+# TannedPy — Issue Tracker
+# Generated from docs/reviews/2026-07-03-multi-model-code-review.md
+# plus reviewer enhancements (see `meta_review` and per-issue `reviewer_note`).
+#
+# Schema (per issue):
+#   id            F1..F26 — stable identifier from the review
+#   title         short human label
+#   theme         A|B|C|D|E|F  (grouping from the report)
+#   category      guard_bypass | false_positive | robustness | adapter_parity |
+#                 structure | documentation
+#   verdict       confirmed | partially_confirmed | mischaracterized
+#   exploit       allow | deny | none
+#                 allow  = guard wrongly permits (bypass)
+#                 deny   = guard wrongly blocks (false positive)
+#                 none   = no exploit; hardening/cosmetic/structural
+#   tags          [everyday] and/or [adversarial] and/or [injection]
+#   severity      high | medium | low | cosmetic
+#   priority_rank 1 = highest real-world risk (from report section 3; ties share a rank)
+#   status        open | wontfix | fixed   (start: open)
+#   locations     source references (file:line)
+#   evidence      how it was verified
+#   fixes         recommendation IDs that address it (see `recommendations`)
+#   reviewer_note optional — enhancement/caveat added during the review-of-the-review
+
+meta:
+  project: TannedPy
+  report: docs/reviews/2026-07-03-multi-model-code-review.md
+  report_date: 2026-07-03
+  pipeline: "4x Sonnet finders -> Opus compiler -> Fable verifier -> reviewer enhancements"
+  guard_file: hooks/scripts/tannedpy_guard.py
+  stats:
+    total: 26
+    confirmed: 22
+    partially_confirmed: 3      # F13, F23, F26
+    mischaracterized: 1         # F20
+    disproven: 0
+  thesis: >
+    A PreToolUse hook is inherently advisory: an agent can append the escape-hatch
+    marker or simply comply differently, so nothing at this layer stops a determined
+    or jailbroken model. Treat the guard as a guardrail-for-the-well-behaved. Invest
+    in the [everyday] fixes (R1-R4); pursue a real parser / allow-list (R6) only if
+    TannedPy is to be marketed as a security control rather than a workflow nudge.
+
+meta_review:
+  # Enhancements and push-backs added while auditing the report itself.
+  verdict: high-quality — reproducible, honest about uncertainty, organized around one root cause
+  notes:
+    - id: F21_shebang_wrinkle
+      refs: [F21]
+      note: >
+        Three-way mismatch the report missed. The guard has no uv check (confirmed:
+        only the shebang, docstring, and `word == "uv"` allow reference uv). BUT the
+        shebang is `#!/usr/bin/env -S uv run --script` (line 1), so on a uv-less
+        machine the guard cannot launch at all — env fails to find uv, the hook errors,
+        Claude Code falls open. So the README's "goes inert without uv" is accidentally
+        true via the shebang, while the report's "the guard still denies every python
+        call" assumes a guard that can't actually execute in that scenario. Cleanest
+        fix may be to make the README honest about *why* it's inert, not to add
+        redundant uv-presence logic.
+    - id: F10_is_noise
+      refs: [F10]
+      note: >
+        Non-exploitable regex nuance (match+$ vs fullmatch) reported at the same
+        granularity as full bypasses. Slightly pads the finding count; keep but treat
+        as cosmetic.
+    - id: F13_threat_model
+      refs: [F13]
+      note: >
+        Softest finding. The DoS needs an attacker-supplied giant arg, but the attacker
+        here is the very agent being guarded — which can already just append the escape
+        hatch (F6). The threat model is somewhat incoherent with the advisory-hook framing.
+    - id: F23_unresolved
+      refs: [F23]
+      note: >
+        Only finding with no verification path (can't execute pi). The contradictory
+        opencode vs pi READMEs it cites are the more actionable defect than the symlink
+        theory itself.
+
+issues:
+  # ---------------- Theme A — Guard bypasses (wrongly ALLOW) ----------------
+  - id: F1
+    title: lone "&" not a segment separator
+    theme: A
+    category: guard_bypass
+    verdict: confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: medium
+    priority_rank: 6
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py:53, hooks/scripts/tannedpy_guard.py:58]
+    evidence: >
+      `echo hi & pip install evil` -> ALLOW. split_segments splits on &&/||/;/|/\n only;
+      a lone & stays in the buffer, the whole thing is one segment, word="echo" -> allowed.
+    fixes: [R1]
+
+  - id: F2
+    title: command substitution $()/backtick/<() not descended into
+    theme: A
+    category: guard_bypass
+    verdict: confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: medium
+    priority_rank: 6
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py]
+    evidence: >
+      All ALLOW: `echo $(python3 foo.py)`, `x=$(python3 -c 'print(1)')`,
+      `echo \`python3 foo.py\``, `cat <(python3 foo.py)`, bare `\`python3 evil.py\``.
+      Splitter never descends into substitutions; shlex treats $(/backtick as ordinary chars.
+    fixes: [R1]
+
+  - id: F3
+    title: "sh -c / bash -c / eval / ssh / find -exec wrap"
+    theme: A
+    category: guard_bypass
+    verdict: confirmed
+    exploit: allow
+    tags: [everyday, adversarial]
+    severity: high
+    priority_rank: 2
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py]
+    evidence: >
+      All ALLOW: `bash -c "python3 evil.py"`, `sh -c "pip install malicious"`,
+      `eval "pip install evil"`, `ssh host 'python3 foo.py'`,
+      `find . -name "*.py" -exec python3 {} \;`. extract_invocation returns the literal
+      first word, never recurses into a string arg. This is the canonical technique the
+      guard claims to stop.
+    fixes: [R1, R6]
+
+  - id: F4
+    title: "`command` builtin treated as pure lookup"
+    theme: A
+    category: guard_bypass
+    verdict: confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: medium
+    priority_rank: 7
+    status: open
+    locations: [patterns.json:4, hooks/scripts/tannedpy_guard.py:125]
+    evidence: >
+      `command python3 foo.py` and `command pip install evil` -> ALLOW. patterns.json:4
+      lists `command` in lookup_commands; evaluate() line 125 continues on any lookup with
+      no arg inspection. Unlike which/type, bash `command` without -v executes its arg.
+    fixes: [R1]
+
+  - id: F5
+    title: absolute-path wrappers bypass basename strip
+    theme: A
+    category: guard_bypass
+    verdict: confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: low
+    priority_rank: 10
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py:88, hooks/scripts/tannedpy_guard.py:100]
+    evidence: >
+      `/usr/bin/env python3 evil.py` and `/usr/bin/sudo python3 evil.py` -> ALLOW.
+      Asymmetry: wrapper match at line 88 is exact (tok in wrappers), but basename-strip
+      (line 100) applies only to the final word. `/usr/bin/env` not in wrappers -> loop
+      breaks at idx 0 -> word="env" (basename) not denied.
+    fixes: [R1]
+
+  - id: F6
+    title: escape-hatch marker is a whole-string substring kill-switch
+    theme: A
+    category: guard_bypass
+    verdict: confirmed
+    exploit: allow
+    tags: [everyday, injection]
+    severity: high
+    priority_rank: 5
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py:116]
+    evidence: >
+      `echo '# tannedpy: allow' && pip install malicious && python3 exploit.py` -> ALLOW;
+      `pip install malware && python3 backdoor.py  # tannedpy: allow` -> ALLOW. Line 116
+      runs `patterns["escape_hatch"] in command` on the raw pre-split string, so the marker
+      anywhere (even inside an unrelated quoted echo) whitelists the whole line.
+      Prompt-injection + accidental-disable vector.
+    fixes: [R3]
+
+  - id: F7
+    title: bundled sudo flags desync arg-skipping
+    theme: A
+    category: guard_bypass
+    verdict: confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: low
+    priority_rank: 11
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py]
+    evidence: >
+      `sudo -Eu root python3 evil.py` -> ALLOW. -Eu not in wrapper_value_flags["sudo"],
+      hits else: idx+=1, then `root` breaks the loop, word="root" not denied, python3 never seen.
+    fixes: [R1]
+
+  - id: F8
+    title: omitted wrappers (timeout/doas/setsid/nice...)
+    theme: A
+    category: guard_bypass
+    verdict: confirmed
+    exploit: allow
+    tags: [everyday]
+    severity: high
+    priority_rank: 1
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py]
+    evidence: >
+      `timeout 30 python3 foo.py`, `doas python3 foo.py`, `setsid python3 foo.py` -> all
+      ALLOW. `timeout` is an everyday idiom, not adversarial. Same root cause as F3/F4
+      (word-only inspection).
+    fixes: [R1]
+
+  - id: F9
+    title: case-sensitive deny pattern
+    theme: A
+    category: guard_bypass
+    verdict: confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: low
+    priority_rank: 12
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py:118]
+    evidence: >
+      `Python3 foo.py`, `PIP install evil` -> ALLOW. No re.IGNORECASE at line 118. Low
+      real-world impact on Linux (case-sensitive filesystem), true hardening gap.
+    fixes: [R1]
+
+  - id: F10
+    title: "regex match+$ instead of fullmatch/\\Z"
+    theme: A
+    category: guard_bypass
+    verdict: confirmed
+    exploit: none
+    tags: [adversarial]
+    severity: cosmetic
+    priority_rank: 12
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py:118]
+    evidence: >
+      deny_re.match("python3\n") -> True but fullmatch -> False. Real behavioral difference,
+      but it makes the guard MORE likely to deny, not allow — no bypass demonstrated.
+      Cosmetic/hardening only.
+    fixes: [R1]
+    reviewer_note: See meta_review F10_is_noise — non-exploitable, count padding.
+
+  # ---------------- Theme B — False positives (wrongly DENY) ----------------
+  - id: F11
+    title: heredoc body scanned and blocked
+    theme: B
+    category: false_positive
+    verdict: confirmed
+    exploit: deny
+    tags: [everyday]
+    severity: high
+    priority_rank: 4
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py]
+    evidence: >
+      `cat <<'EOF'\npip is great\nEOF` -> DENY. split_segments splits unconditionally on
+      unquoted \n with no heredoc awareness; `pip is great` becomes a segment, word="pip"
+      denied. Realistic: commit-message heredocs (per global CLAUDE.md) containing
+      pip/python as prose get blocked.
+    fixes: [R2]
+
+  - id: F12
+    title: "`--version 2>&1` misses exact-match exemption"
+    theme: B
+    category: false_positive
+    verdict: confirmed
+    exploit: deny
+    tags: [everyday]
+    severity: high
+    priority_rank: 3
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py:128, patterns.json:16]
+    evidence: >
+      `python3 --version 2>&1` -> DENY. Line 128 `if args in version_args` needs exact
+      ["--version"]; the 2>&1 token makes args=["--version","2>&1"], exemption misses,
+      command denied. Extremely common "does python exist" idiom.
+    fixes: [R2]
+
+  # ---------------- Theme C — Robustness / DoS ----------------
+  - id: F13
+    title: superlinear shlex.split DoS, no hook timeout
+    theme: C
+    category: robustness
+    verdict: partially_confirmed
+    exploit: none
+    tags: [adversarial]
+    severity: medium
+    priority_rank: 9
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py, hooks/hooks.json]
+    evidence: >
+      Superlinear scaling reproduced: shlex.split on 20k/40k/80k/160k `a`s ->
+      0.009/0.026/0.082/0.276s (~O(n^1.6)). hooks/hooks.json sets no timeout so Claude
+      Code's 600s default governs. Downgraded to PARTIAL: the "hours/hung 2m+" figure was
+      extrapolation; the accurate claim is a large embedded arg stalling every Bash call
+      for seconds-to-minutes.
+    fixes: [R4]
+    reviewer_note: See meta_review F13_threat_model — attacker == guarded agent, which can already use F6.
+
+  - id: F14
+    title: silent fail-open on malformed tool_input
+    theme: C
+    category: robustness
+    verdict: confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: medium
+    priority_rank: 8
+    status: open
+    locations: [hooks/scripts/tannedpy_guard.py]
+    evidence: >
+      e2e verified: {"command":123} -> stderr "internal error, failing open: argument of
+      type 'int' is not iterable", exit 0, no deny; {"tool_input":"notadict"} and bare
+      [1,2,3] likewise. Always exits 0, so stderr is invisible in normal (non-debug)
+      operation. README documents only the "no uv" fail-open.
+    fixes: [R4]
+
+  # ---------------- Theme D — Adapter parity & test integrity ----------------
+  - id: F15
+    title: parity drift — Python allows what TS adapters deny (unterminated quote)
+    theme: D
+    category: adapter_parity
+    verdict: confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: medium
+    priority_rank: 14
+    status: open
+    locations: [adapters/opencode/tannedpy.ts:78, adapters/pi/index.ts:79]
+    evidence: >
+      Python: `python3 'unterminated` -> ALLOW (shlex raises -> extract_invocation returns
+      (None,[]) -> segment skipped). TS tokens() pushes the trailing cur on unclosed quote
+      -> toks ["python3","unterminated"] -> denyRe.test("python3") -> DENY. Same input,
+      opposite decision. Header comments claim adapters mirror the guard; here the guard is
+      the lax side (flips allow into deny).
+    fixes: [R5]
+
+  - id: F16
+    title: "\"parity\" test asserts no parity against the Python guard"
+    theme: D
+    category: adapter_parity
+    verdict: confirmed
+    exploit: none
+    tags: [adversarial]
+    severity: medium
+    priority_rank: 13
+    status: open
+    locations: [adapters/tests/parity.test.ts, tests/test_guard.py:155-198]
+    evidence: >
+      parity.test.ts imports only `evaluate` from the two TS files and checks a hardcoded
+      DENY/ALLOW list; it never invokes hooks/scripts/tannedpy_guard.py (contrast
+      test_guard.py which shells out via subprocess). Two identically-wrong TS impls pass
+      100% — exactly the F15 situation. README:56 repeats the overclaim.
+    fixes: [R5]
+
+  - id: F17
+    title: no JS/TS test scaffolding or CI
+    theme: D
+    category: adapter_parity
+    verdict: confirmed
+    exploit: none
+    tags: [adversarial]
+    severity: low
+    priority_rank: 17
+    status: open
+    locations: [adapters/]
+    evidence: >
+      No package.json, bunfig.toml, tsconfig.json, JS lockfile; no .github/workflows.
+      `bun test` per README has no automated home. (uv.lock present is Python-only.)
+    fixes: [R5]
+
+  - id: F18
+    title: thin opencode permission fallback vs guard coverage
+    theme: D
+    category: adapter_parity
+    verdict: confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: medium
+    priority_rank: 15
+    status: open
+    locations: [adapters/opencode/opencode-permissions.json]
+    evidence: >
+      Denies only python*/python2/python3/python3.*/pip/pip3/virtualenv globs — no wrappers
+      (sudo, env, nice...), no -m pip / -m venv, no pip2/easy_install, no python2.*. So
+      `sudo python3 evil.py`, `python2.7 -m pip ...`, `nice -n 10 pip ...` sail through the
+      one path that guards subagents (opencode #5894). File does have python3.* but not
+      python2.* — asymmetry confirmed.
+    fixes: [R5]
+
+  - id: F19
+    title: TS adapters load patterns once, go permanently inert on bad file
+    theme: D
+    category: adapter_parity
+    verdict: confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: low
+    priority_rank: 16
+    status: open
+    locations: [adapters/opencode/tannedpy.ts:11-17, adapters/pi/index.ts:12-18]
+    evidence: >
+      Both TS files parse patterns.json at module top-level; on failure `patterns` stays
+      null and evaluate() returns null for the process lifetime. Python main() calls
+      load_patterns() every invocation (line 139) and self-heals. Larger blast radius for a
+      transient bad file on the TS side.
+    fixes: [R5]
+
+  - id: F23
+    title: pi symlink may break relative patterns.json path
+    theme: D
+    category: adapter_parity
+    verdict: partially_confirmed
+    exploit: allow
+    tags: [adversarial]
+    severity: low
+    priority_rank: 18
+    status: open
+    locations: [adapters/pi/index.ts:8]
+    evidence: >
+      index.ts:8 does here=dirname(fileURLToPath(import.meta.url)) then joins
+      ../../shared/patterns.json lexically. If pi's jiti loader doesn't realpath the
+      symlink, here is the symlink location -> resolves to ~/.pi/agent/shared/patterns.json
+      (wrong) -> permanent-inert (F19). opencode README warns "a symlink breaks the relative
+      path"; pi README claims "dir symlink keeps relative paths intact" — contradictory
+      advice for the same mechanism. Can't execute pi to settle it.
+    fixes: [R5]
+    reviewer_note: See meta_review F23_unresolved — the contradictory READMEs are the actionable defect.
+
+  - id: F24
+    title: opencode API usage uncited
+    theme: D
+    category: adapter_parity
+    verdict: confirmed
+    exploit: none
+    tags: [adversarial]
+    severity: low
+    priority_rank: 21
+    status: open
+    locations: [adapters/opencode/tannedpy.ts:129-140]
+    evidence: >
+      pi README has a dated "API note" cross-checking two sources; opencode's
+      tool.execute.before with (input:{tool}, output:{args}) and throw-to-block has no
+      equivalent verification — still the design-doc guess.
+    fixes: [R7]
+
+  # ---------------- Theme E/F — Structure & documentation ----------------
+  - id: F20
+    title: duplicate .plugin/plugin.json (deliberate, under-documented)
+    theme: E
+    category: structure
+    verdict: mischaracterized
+    exploit: none
+    tags: []
+    severity: low
+    priority_rank: 21
+    status: open
+    locations: [.plugin/plugin.json, plugin.json]
+    evidence: >
+      git show 54f835f states verbatim: "'rules' is not a Claude Code field — kept in the
+      generic .plugin/plugin.json for open-plugins conformance, dropped from the vendor
+      manifest." The commit intentionally diverged the two files. Both git-tracked, both
+      version 0.1.0 (no mismatch). "stale cruft" reading DISPROVEN; genuine defect is only
+      that the intent is nowhere documented.
+    fixes: [R7]
+
+  - id: F21
+    title: README "fail-open by design" is false (no uv check in guard)
+    theme: F
+    category: documentation
+    verdict: confirmed
+    exploit: none
+    tags: []
+    severity: medium
+    priority_rank: 19
+    status: open
+    locations: [README.md:11-12, hooks/scripts/tannedpy_guard.py:1]
+    evidence: >
+      README:11-12 says "no uv on the machine -> tannedpy goes inert." Guard has no
+      uv-presence check (verified: command -v uv / shutil.which absent; the uv hits are the
+      shebang, docstring, and `word == "uv"` allow). Only session-context.sh:3 checks uv,
+      gating the banner. On a uv-less machine the guard logic still denies every python/pip
+      call, redirecting to a tool that isn't installed.
+    fixes: [R7]
+    reviewer_note: >
+      See meta_review F21_shebang_wrinkle. The shebang `#!/usr/bin/env -S uv run --script`
+      means the guard can't launch at all without uv, so "goes inert" is accidentally true
+      at the runtime level even though the logic never checks for uv. Report's "still denies
+      every call" assumes a guard that can't execute in that scenario. Fix the README to
+      explain WHY it's inert rather than adding redundant logic.
+
+  - id: F22
+    title: escape-hatch docs describe per-command scoping the code doesn't honor
+    theme: F
+    category: documentation
+    verdict: confirmed
+    exploit: none
+    tags: []
+    severity: medium
+    priority_rank: 20
+    status: open
+    locations: [README.md:43-45, rules/tannedpy.md:7, skills/uv-projects/SKILL.md]
+    evidence: >
+      README:43-45 ("That exact marker"), rules/tannedpy.md:7 ("mark the command"),
+      skills/uv-projects/SKILL.md ("The `# tannedpy: allow` suffix bypasses it") all
+      describe per-command scoping; F6 proves it's a whole-string substring kill-switch.
+      Doc/behavior disagree.
+    fixes: [R3]
+
+  - id: F25
+    title: README references missing research/ directory
+    theme: F
+    category: documentation
+    verdict: confirmed
+    exploit: none
+    tags: []
+    severity: low
+    priority_rank: 21
+    status: open
+    locations: [README.md:58-60]
+    evidence: >
+      README:58-60 cites grimoire research/ topics; research/ does not exist (only
+      docs/superpowers/{plans,specs}). Dead reference.
+    fixes: [R7]
+
+  - id: F26
+    title: two differing plugin descriptions
+    theme: F
+    category: documentation
+    verdict: partially_confirmed
+    exploit: none
+    tags: []
+    severity: cosmetic
+    priority_rank: 21
+    status: open
+    locations: [marketplace.json:9, plugin.json:4]
+    evidence: >
+      marketplace.json:9 ("uv-first enforcement: blocks system python/pip, teaches uv
+      shebang scripts") vs plugin.json:4 (longer prose). They differ, but a short
+      marketplace blurb vs a full manifest description is conventional; "inconsistency" is
+      a stretch. Cosmetic.
+    fixes: [R7]
+
+recommendations:
+  - id: R1
+    title: Recurse into command-valued args; expand separators/constructs
+    fixes: [F1, F2, F3, F4, F5, F7, F8, F9, F10]
+    where: [hooks/scripts/tannedpy_guard.py, "adapters TS splitSegments/extractInvocation"]
+    detail: >
+      After extracting the leading word, if it is a shell-invoking command
+      (sh/bash/zsh/eval/env in -c/exec position, timeout/doas/setsid/nice/ssh/xargs,
+      find ... -exec, command), take the command-valued string argument and re-run
+      evaluate() recursively. Extend split_segments to break on a lone & and to descend
+      into $(...), backticks, and <(...). For `command`, treat as a lookup only when -v/-V
+      is present. Honest caveat: whack-a-mole on a hand-rolled parser; durable fix is R6.
+
+  - id: R2
+    title: Tolerant version_args and heredoc handling
+    fixes: [F11, F12]
+    where: [hooks/scripts/tannedpy_guard.py:128, patterns.json:16]
+    detail: >
+      F12: strip trailing redirection tokens (2>&1, >...) before the exact --version match,
+      or treat as a version check when the first arg is --version/-V and the rest are only
+      redirections/pipes. F11: teach split_segments heredoc awareness — on <<['"]?WORD,
+      swallow lines until the terminator instead of splitting/scanning the body. Quick wins,
+      high UX payoff.
+
+  - id: R3
+    title: Scope the escape hatch to the segment; align docs
+    fixes: [F6, F22]
+    where: [hooks/scripts/tannedpy_guard.py:116]
+    detail: >
+      Move the escape_hatch check inside the per-segment loop so the marker only whitelists
+      the segment it trails, and require it as a trailing # comment rather than an
+      anywhere-substring. Matches what the docs already promise ("this exact command").
+
+  - id: R4
+    title: Fail closed-ish and loud on malformed input; cap input size
+    fixes: [F14, F13]
+    where: [hooks/scripts/tannedpy_guard.py, hooks/hooks.json]
+    detail: >
+      Normalize tool_input defensively in main(): if command isn't a string, treat as empty
+      / deny with a clear "couldn't parse command" message, and make the log visible. Add an
+      input-length cap (~100 KB) and a "timeout" to both hooks/hooks.json entries.
+
+  - id: R5
+    title: Make the adapter test assert real parity; add CI
+    fixes: [F16, F15, F17, F18, F19]
+    where: [adapters/tests/parity.test.ts, adapters/]
+    detail: >
+      Shell out to hooks/scripts/tannedpy_guard.py and assert the TS evaluate() matches the
+      Python decision for every case (incl. `python3 'unterminated`). Add
+      package.json/tsconfig.json and a CI workflow running both `uv run pytest` and
+      `bun test`. Decide F15's direction (deny-leaning so both agree). Thicken
+      opencode-permissions.json to mirror wrapper_commands + -m pip/-m venv. Have TS adapters
+      reload patterns per-call or watch the file.
+
+  - id: R6
+    title: (Strategic) real shell parser OR deny-by-default allow-list
+    fixes: [F3]
+    where: [hooks/scripts/tannedpy_guard.py]
+    detail: >
+      The regex-on-first-token core cannot be made robust by patching. Either parse with a
+      shell AST (e.g. bashlex) to enumerate every command node (incl. inside $(...), -c
+      strings, pipelines), or invert to an allow-list (allow only vetted leading tokens,
+      flag anything reaching a python/pip token). Pursue only to market as a security control.
+
+  - id: R7
+    title: Documentation truth-up
+    fixes: [F21, F20, F24, F25, F26]
+    where: [README.md, .plugin/plugin.json, marketplace.json]
+    detail: >
+      Reword README:11-12 to describe actual behavior (guard always denies; the SessionStart
+      banner is what goes inert without uv) — see F21 reviewer_note re: the shebang. Add a
+      comment in .plugin/plugin.json + README row explaining the open-plugins duplicate. Add
+      the opencode API verification note. Drop or create the research/ reference. Reconcile
+      the two descriptions.
