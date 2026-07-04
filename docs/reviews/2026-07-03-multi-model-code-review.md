@@ -8,7 +8,7 @@
 > Result: 22 confirmed, 3 partially confirmed, 1 mischaracterization corrected (F20), 0 disproven.
 
 Final stage of the multi-model review. Every finding below was checked against the current code in
-`/home/kwhatcher/projects/TannedPy`; bypasses were reproduced by importing `evaluate()` directly and
+the repository root; bypasses were reproduced by importing `evaluate()` directly and
 running a case table (repro driver: `scratchpad/repro.py`, passes `ruff check`). TypeScript adapter
 findings were verified by close reading only (no `package.json`/bun runtime exists — that is F17), and
 are flagged as such.

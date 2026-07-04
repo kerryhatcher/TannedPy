@@ -72,7 +72,7 @@ tannedpy/
 - [ ] **Step 1: Set up dev tooling and remove scaffold**
 
 ```bash
-cd /home/kwhatcher/projects/tannedpy
+cd /path/to/tannedpy
 rm main.py
 uv add --dev pytest ruff
 ```
@@ -873,7 +873,7 @@ git commit -m "feat(agents): uv-scripter and uv-migrator subagents"
 In a Claude Code session (any directory):
 
 ```
-/plugin marketplace add /home/kwhatcher/projects/tannedpy
+/plugin marketplace add /path/to/tannedpy
 /plugin install tannedpy@tannedpy
 ```
 
