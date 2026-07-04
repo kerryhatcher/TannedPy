@@ -1,4 +1,4 @@
-# tannedpy 🔥
+# TannedPy 🔥
 
 Forces AI coding agents to use [uv](https://docs.astral.sh/uv/) for all Python —
 no system python, no pip, no manual venvs.
