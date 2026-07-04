@@ -1,5 +1,6 @@
 {
   "name": "tannedpy",
+  "description": "uv-first enforcement plugin for AI coding agents",
   "owner": {"name": "Kerry Hatcher"},
   "plugins": [
     {

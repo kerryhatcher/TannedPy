@@ -7,6 +7,5 @@
   "keywords": ["uv", "python", "pep723", "hooks", "enforcement"],
   "hooks": "./hooks/hooks.json",
   "skills": "./skills/",
-  "agents": "./agents/",
-  "rules": "./rules/"
+  "agents": ["./agents/uv-scripter.md", "./agents/uv-migrator.md"]
 }
