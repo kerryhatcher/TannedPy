@@ -1,0 +1,11 @@
+{
+  "name": "tannedpy",
+  "version": "0.1.0",
+  "description": "Forces AI agents to use uv for all Python: self-contained PEP 723 scripts with '#!/usr/bin/env -S uv run --script' shebangs, and uv init/add/run for projects. Blocks bare python/pip with redirect guidance.",
+  "author": {"name": "Kerry Hatcher"},
+  "license": "MIT",
+  "keywords": ["uv", "python", "pep723", "hooks", "enforcement"],
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills/",
+  "agents": ["./agents/uv-scripter.md", "./agents/uv-migrator.md"]
+}
