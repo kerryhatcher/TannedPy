@@ -185,15 +185,26 @@ interface ExtensionAPI {
 }
 
 // Module-level, one-shot: set in tool_call, consumed (and deleted) by
-// tool_result for the same toolCallId.
+// tool_result for the same toolCallId. Bounded: a call whose tool_result
+// never fires (aborted/errored) would otherwise leave its entry behind
+// forever, so past the cap the oldest entry is evicted.
+export const PENDING_NOTES_MAX = 64
 const pendingNotes = new Map<string, string>()
+
+function stashNote(id: string, note: string) {
+  pendingNotes.set(id, note)
+  if (pendingNotes.size > PENDING_NOTES_MAX) {
+    const oldest = pendingNotes.keys().next().value
+    if (oldest !== undefined) pendingNotes.delete(oldest)
+  }
+}
 
 export default function tannedpy(pi: ExtensionAPI) {
   pi.on("tool_call", (event) => {
     if (event.toolName !== "bash") return undefined
     const { deny, note } = evaluate(String(event.input.command ?? ""))
     if (deny) return { block: true, reason: deny }
-    if (note) pendingNotes.set(event.toolCallId, note)
+    if (note) stashNote(event.toolCallId, note)
     return undefined
   })
 

@@ -21,8 +21,9 @@ equality (`args in version_args`, `tannedpy_guard.py:128`) to "first arg is exac
 Change `evaluate()`'s return contract from `str | None` (deny reason or nothing) to a
 three-state decision — deny(reason) / allow-with-note(note) / no-opinion — and map that
 per runtime: Claude Code emits `hookSpecificOutput.additionalContext` JSON (model-facing
-channel, confirmed), opencode and pi deliver via their best available channel per Phase 0
-research (documented divergence if a runtime lacks an allow-path advisory channel).
+channel, confirmed), opencode and pi deliver via the advisory channels confirmed in
+Phase 0 research (opencode: in-place output mutation in `tool.execute.after`; pi:
+`tool_result` content append), preserving the allow/deny + note parity FR-007/SC-005 require.
 
 ## Technical Context
 

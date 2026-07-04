@@ -32,7 +32,7 @@ ordinary, non-adversarial commands and erodes trust in the guard's correctness.
 Fixing it alone delivers standalone value even without the nudge.
 
 **Independent Test**: Run a set of version probes with and without trailing
-redirections/pipes through the guard and confirm every one is allowed to execute
+redirections through the guard and confirm every one is allowed to execute
 (no deny), while a real work command like `python3 script.py` is still denied.
 
 **Acceptance Scenarios**:
@@ -124,14 +124,14 @@ each adapter's allow/deny + note decision matches the reference Python guard.
 
 ### Key Concepts
 
-- **Version probe**: A denied python/pip invocation whose only meaningful arguments are a version flag (exactly `--version` or `-V`) optionally followed by shell redirection tokens (any redirection operator and target). It requests information and performs no work. (`pip --version` / `pip -V` use these same flags.)
+- **Version probe**: A python/pip invocation matched by the guard's deny pattern whose only meaningful arguments are a version flag (exactly `--version` or `-V`) optionally followed by shell redirection tokens (any redirection operator and target). It requests information and performs no work. (`pip --version` / `pip -V` use these same flags.)
 - **Advisory note**: A short, agent-facing reminder delivered alongside an allow decision, steering the agent toward uv. It is separate from the human-facing permission message and does not block the command.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: 0% of system-python/pip version probes are wrongly denied — including every probe with trailing redirections/pipes (currently `python3 --version 2>&1` is denied).
+- **SC-001**: 0% of system-python/pip version probes are wrongly denied — including every probe with trailing redirections (currently `python3 --version 2>&1` is denied; a piped probe like `python3 --version | head` is covered because the pipe splits it into segments and the probe segment is allowed).
 - **SC-002**: 100% of recognized python/pip version probes deliver the uv advisory note to the agent.
 - **SC-003**: 0 regressions — all previously-passing guard tests and adapter parity tests still pass.
 - **SC-004**: 0 false notes — no non-python command and no real-work python command receives the version-probe note.
@@ -139,7 +139,7 @@ each adapter's allow/deny + note decision matches the reference Python guard.
 
 ## Assumptions
 
-- A "version probe" is defined as a denied python/pip word whose only non-empty arguments are a version flag (exactly `--version` or `-V`; `pip --version` / `pip -V` use the same flags) optionally followed by shell redirection tokens (any redirection operator and target). Any other trailing argument disqualifies it from the exemption. Pipes are segment separators, not trailing tokens.
+- A "version probe" is defined as a python/pip word matched by the guard's deny pattern whose only non-empty arguments are a version flag (exactly `--version` or `-V`; `pip --version` / `pip -V` use the same flags) optionally followed by shell redirection tokens (any redirection operator and target). Any other trailing argument disqualifies it from the exemption. Pipes are segment separators, not trailing tokens.
 - The advisory note fires on every recognized probe whose overall command decision is allow (a co-located denied segment suppresses the note per FR-006). The guard evaluates each command invocation independently and holds no cross-invocation state, so there is no per-session deduplication; terseness (FR-004) is the nag-fatigue mitigation rather than frequency limiting.
 - Existing deny-pattern case sensitivity and wrapper handling are unchanged by this feature. A version probe behind an unrecognized wrapper (e.g. `timeout python3 --version`) already bypasses the guard entirely and is outside this feature's scope.
 - The agent-facing advisory channel exists and can be combined with an allow decision in every targeted runtime (verified for Claude Code; assumed reachable for opencode and pi per their extension APIs — to be confirmed at plan time).

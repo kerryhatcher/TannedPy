@@ -145,8 +145,19 @@ export function evaluate(command: string): { deny: string | null; note: string |
 }
 
 // Module-level, one-shot: set in tool.execute.before, consumed (and deleted)
-// by tool.execute.after for the same callID.
+// by tool.execute.after for the same callID. Bounded: a call that never
+// reaches its after-hook (aborted/errored) would otherwise leave its entry
+// behind forever, so past the cap the oldest entry is evicted.
+export const PENDING_NOTES_MAX = 64
 const pendingNotes = new Map<string, string>()
+
+function stashNote(id: string, note: string) {
+  pendingNotes.set(id, note)
+  if (pendingNotes.size > PENDING_NOTES_MAX) {
+    const oldest = pendingNotes.keys().next().value
+    if (oldest !== undefined) pendingNotes.delete(oldest)
+  }
+}
 
 export const TannedPyPlugin = async () => {
   return {
@@ -157,7 +168,7 @@ export const TannedPyPlugin = async () => {
       if (input.tool !== "bash") return
       const { deny, note } = evaluate(output.args.command ?? "")
       if (deny) throw new Error(deny)
-      if (note) pendingNotes.set(input.callID, note)
+      if (note) stashNote(input.callID, note)
     },
     "tool.execute.after": async (
       input: { tool: string; sessionID: string; callID: string; args: { command?: string } },

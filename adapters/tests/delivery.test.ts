@@ -3,8 +3,8 @@
 // denied command must still throw/block with no note; a non-probe allowed
 // command must leave the tool result untouched; the stash must be one-shot.
 import { describe, expect, test } from "bun:test"
-import { TannedPyPlugin } from "../opencode/tannedpy.ts"
-import tannedpy from "../pi/index.ts"
+import { PENDING_NOTES_MAX as OPENCODE_STASH_MAX, TannedPyPlugin } from "../opencode/tannedpy.ts"
+import tannedpy, { PENDING_NOTES_MAX as PI_STASH_MAX } from "../pi/index.ts"
 
 describe("opencode adapter delivery", () => {
   test("probe: note is appended to the tool result after execution", async () => {
@@ -50,10 +50,33 @@ describe("opencode adapter delivery", () => {
     const callID = "call-probe-2"
     await before({ tool: "bash", sessionID: "s1", callID }, { args: { command: "pip --version" } })
     const output = { title: "pip --version", output: "pip 24.0", metadata: {} }
+    const originalLength = output.output.length
     await after({ tool: "bash", sessionID: "s1", callID, args: { command: "pip --version" } }, output)
     const firstLength = output.output.length
+    expect(firstLength).toBeGreaterThan(originalLength)
     await after({ tool: "bash", sessionID: "s1", callID, args: { command: "pip --version" } }, output)
     expect(output.output.length).toBe(firstLength)
+  })
+
+  test("stash is bounded: oldest entry is evicted once the cap is exceeded", async () => {
+    const plugin = await TannedPyPlugin()
+    const before = plugin["tool.execute.before"]
+    const after = plugin["tool.execute.after"]
+    for (let i = 0; i <= OPENCODE_STASH_MAX; i++) {
+      await before(
+        { tool: "bash", sessionID: "s1", callID: `call-evict-${i}` },
+        { args: { command: "pip --version" } },
+      )
+    }
+    const evicted = { title: "pip --version", output: "pip 24.0", metadata: {} }
+    await after({ tool: "bash", sessionID: "s1", callID: "call-evict-0", args: { command: "pip --version" } }, evicted)
+    expect(evicted.output).toBe("pip 24.0")
+    const survivor = { title: "pip --version", output: "pip 24.0", metadata: {} }
+    await after(
+      { tool: "bash", sessionID: "s1", callID: `call-evict-${OPENCODE_STASH_MAX}`, args: { command: "pip --version" } },
+      survivor,
+    )
+    expect(survivor.output).toContain("uv")
   })
 })
 
@@ -124,5 +147,17 @@ describe("pi adapter delivery", () => {
     expect(first).toBeDefined()
     const second = toolResult({ toolCallId: "id-4", content: [] })
     expect(second).toBeUndefined()
+  })
+
+  test("stash is bounded: oldest entry is evicted once the cap is exceeded", () => {
+    const fakePi = makeFakePi()
+    tannedpy(fakePi as never)
+    const toolCall = fakePi.handlers["tool_call"][0]
+    const toolResult = fakePi.handlers["tool_result"][0]
+    for (let i = 0; i <= PI_STASH_MAX; i++) {
+      toolCall({ toolName: "bash", toolCallId: `evict-${i}`, input: { command: "pip --version" } })
+    }
+    expect(toolResult({ toolCallId: "evict-0", content: [] })).toBeUndefined()
+    expect(toolResult({ toolCallId: `evict-${PI_STASH_MAX}`, content: [] })).toBeDefined()
   })
 })

@@ -10,7 +10,7 @@ shapes from the [runtime-integrations contract](contracts/runtime-integrations.m
 
 - `uv` installed (guard and tests run through it — Constitution I)
 - `bun` installed (adapter tests)
-- Repo root: `/home/kwhatcher/projects/TannedPy`; a healthy `.venv` via `uv sync`
+- Run all commands from the repository root, with a healthy `.venv` via `uv sync`
 
 ## 1. Full gate (must be green before merge)
 
